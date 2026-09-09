@@ -23,6 +23,7 @@ import {
   hasVisibleMockups,
   shouldRenderSourceImage,
 } from "@/lib/device-mockups/layouts";
+import { StoreScreenshotsShortcut } from "@/components/store-screenshots/StoreScreenshotsFeatureCard";
 
 function EditorMain() {
   const isMobile = useIsMobile();
@@ -81,7 +82,8 @@ function EditorMain() {
       <EditorHeader />
 
       {isMobile && (
-        <div className="bg-background border-b border-foreground/10 flex items-center justify-end px-3 py-2 z-10 shrink-0">
+        <div className="bg-background border-b border-foreground/10 flex items-center justify-between gap-2 px-3 py-2 z-10 shrink-0">
+          <StoreScreenshotsShortcut compact className="min-w-0" />
           <Button
             variant="ghost"
             size="sm"

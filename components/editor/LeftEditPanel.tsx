@@ -30,6 +30,7 @@ import {
 import { cn } from "@/lib/utils";
 import { useImageStore } from "@/lib/store";
 import { SegmentedControl } from "@/components/ui/segmented-control";
+import { StoreScreenshotsFeatureCard } from "@/components/store-screenshots/StoreScreenshotsFeatureCard";
 
 type LeftTabType = "edit" | "background" | "depth";
 
@@ -185,6 +186,7 @@ export function LeftEditPanel() {
         </div>
         <div className="flex-1 overflow-y-auto scrollbar-hide">
           <div className="p-3">
+            <StoreScreenshotsFeatureCard />
             <PresetGallery />
           </div>
         </div>

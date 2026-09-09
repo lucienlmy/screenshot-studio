@@ -410,8 +410,11 @@ export function useEditorStoreSync() {
     // Sync background
     const bgConfig = imageStore.backgroundConfig;
     if (bgConfig.type === "gradient") {
+      const isCustomGradient =
+        typeof bgConfig.value === "string" &&
+        /^(?:linear|radial|conic)-gradient\(/.test(bgConfig.value);
       const gradientStr =
-        gradientColors[bgConfig.value as GradientKey] ||
+        (isCustomGradient ? bgConfig.value : gradientColors[bgConfig.value as GradientKey]) ||
         gradientColors.vibrant_orange_pink;
       const { colorA, colorB, direction } = parseGradientColors(gradientStr);
       if (
