@@ -119,6 +119,24 @@ export function ToolWorkspace({ tool }: ToolWorkspaceProps) {
 
   const Panel = PANELS[engine];
   const reference = queue.items.find((item) => item.source)?.source ?? null;
+  // What the queue will actually be written as, so a panel can flag a setting
+  // that cannot do anything — or is actively counterproductive — for these
+  // particular files. The source formats matter too: re-encoding an already
+  // lossy image losslessly inflates it, which is worth saying before the run.
+  const outputFormats = Array.from(
+    new Set(
+      queue.items.map((item) =>
+        resolveOutputFormat(settings.format, item.file.type)
+      )
+    )
+  );
+  const sourceFormats = Array.from(
+    new Set(
+      queue.items
+        .map((item) => formatFromMime(item.file.type))
+        .filter((format): format is RasterFormat => format !== null)
+    )
+  );
   const hasItems = queue.items.length > 0;
   const totalSaved = savingsPercent(
     queue.totalInputBytes,
@@ -157,6 +175,8 @@ export function ToolWorkspace({ tool }: ToolWorkspaceProps) {
           onChange={updateSettings}
           encodable={encodable}
           reference={reference}
+          outputFormats={outputFormats}
+          sourceFormats={sourceFormats}
         />
 
         <div className="flex flex-col gap-2 border-t border-border pt-4">
@@ -210,6 +230,11 @@ export function ToolWorkspace({ tool }: ToolWorkspaceProps) {
               <span className="font-medium text-emerald-600 dark:text-emerald-500">
                 {" "}
                 ({totalSaved}% smaller)
+              </span>
+            ) : totalSaved < 0 ? (
+              <span className="font-medium text-amber-600 dark:text-amber-500">
+                {" "}
+                ({Math.abs(totalSaved)}% bigger)
               </span>
             ) : null}
           </p>
