@@ -36,6 +36,7 @@ import { cn } from '@/lib/utils';
 import { useImageStore } from '@/lib/store';
 import { AnimationPresetGallery } from '@/components/timeline/AnimationPresetGallery';
 import { SegmentedControl } from '@/components/ui/segmented-control';
+import { StoreScreenshotsFeatureCard } from '@/components/store-screenshots/StoreScreenshotsFeatureCard';
 
 type EditorMode = 'screenshot' | 'browser' | 'device';
 type TabType = 'settings' | 'edit' | 'background' | 'transforms' | 'animate' | 'depth';
@@ -213,6 +214,7 @@ export function UnifiedRightPanel({
 
         <div className="flex-1 overflow-y-auto scrollbar-hide">
           <div className="p-4">
+            <StoreScreenshotsFeatureCard />
             <PresetGallery />
           </div>
         </div>
