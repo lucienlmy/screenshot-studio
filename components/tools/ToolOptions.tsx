@@ -9,6 +9,7 @@ import { SegmentedControl } from "@/components/ui/segmented-control";
 import { cn } from "@/lib/utils";
 import {
   FORMAT_LABELS,
+  isLossy,
   matchLockedAxis,
   supportsTransparency,
   type CompressionLevel,
@@ -25,6 +26,14 @@ export interface PanelProps {
   encodable: RasterFormat[];
   /** Intrinsic size of the first queued image, for the resize form's hints. */
   reference: Dimensions | null;
+  /**
+   * The formats the queued images will actually be written as under the
+   * current settings. Lets a panel warn about a setting that cannot do
+   * anything for this particular queue.
+   */
+  outputFormats: RasterFormat[];
+  /** The formats the queued images arrived in. */
+  sourceFormats: RasterFormat[];
 }
 
 export function OptionGroup({
@@ -126,29 +135,58 @@ export function CompressOptions({
   settings,
   onChange,
   encodable,
+  outputFormats,
+  sourceFormats,
 }: PanelProps) {
   const active = COMPRESSION_LEVELS.find((level) => level.id === settings.level);
 
+  /**
+   * A lossless target has no quality to trade away, so the level is inert and
+   * the encoder often returns a file no smaller than the original. Saying so
+   * up front stops the unchanged result from reading as a broken button.
+   */
+  const losslessOutput =
+    outputFormats.length > 0 && outputFormats.every((format) => !isLossy(format));
+  /**
+   * Writing an already lossy image losslessly has to store every pixel the
+   * decoder produced, including the compression artefacts, so the file grows
+   * — often several times over. The run is honoured because the format was
+   * asked for explicitly, which makes warning first the only kind thing to do.
+   */
+  const inflatesSources = losslessOutput && sourceFormats.some(isLossy);
+  const losslessLabel = outputFormats
+    .map((format) => FORMAT_LABELS[format])
+    .join(" and ");
+
   return (
     <div className="flex flex-col gap-5">
-      <OptionGroup label="Compression level" hint={active?.hint}>
-        <SegmentedControl
-          options={COMPRESSION_LEVELS.map((level) => ({
-            id: level.id,
-            label: level.label,
-          }))}
-          value={settings.level}
-          onChange={(next) => onChange({ level: next as CompressionLevel })}
-          ariaLabel="Compression level"
-          size="sm"
-        />
+      <OptionGroup
+        label="Compression level"
+        hint={
+          losslessOutput
+            ? `No effect while the output is ${losslessLabel} — pick a lossy format below to use it.`
+            : active?.hint
+        }
+      >
+        <div className={cn(losslessOutput && "opacity-50")}>
+          <SegmentedControl
+            options={COMPRESSION_LEVELS.map((level) => ({
+              id: level.id,
+              label: level.label,
+            }))}
+            value={settings.level}
+            onChange={(next) => onChange({ level: next as CompressionLevel })}
+            ariaLabel="Compression level"
+            size="sm"
+          />
+        </div>
       </OptionGroup>
 
       <OptionGroup
         label="Output format"
         hint={
           settings.format === "auto"
-            ? "Keeping the original format. PNG is already lossless. To make a PNG meaningfully smaller, switch the output to WebP."
+            ? "Keeping each image in the format it arrived in."
             : undefined
         }
       >
@@ -159,6 +197,45 @@ export function CompressOptions({
           includeAuto
         />
       </OptionGroup>
+
+      {losslessOutput ? (
+        <div
+          className={cn(
+            "rounded-lg border p-3",
+            inflatesSources
+              ? "border-amber-500/40 bg-amber-500/[0.07]"
+              : "border-border bg-muted/40"
+          )}
+        >
+          <p className="text-xs leading-relaxed text-muted-foreground">
+            {inflatesSources ? (
+              <>
+                <span className="font-medium text-amber-600 dark:text-amber-500">
+                  {losslessLabel} output will make these images much bigger.
+                </span>{" "}
+                They are already compressed, and {losslessLabel} has to store
+                every pixel exactly, artefacts included — expect several times
+                the original size. You will get that larger file, because you
+                asked for this format. Pick another output format to reduce
+                them instead.
+              </>
+            ) : (
+              <>
+                <span className="font-medium text-foreground">
+                  {losslessLabel} is a lossless format.
+                </span>{" "}
+                Compressing it cannot throw pixels away, so the level above
+                changes nothing — every setting produces the same file. Some
+                images still shrink a little, because re-saving drops metadata
+                the picture does not need, but that is a few percent at best
+                and never the image itself. When the result is not smaller your
+                original is kept. Pick another output format for a real
+                reduction.
+              </>
+            )}
+          </p>
+        </div>
+      ) : null}
 
       {settings.format !== "auto" ? (
         <BackgroundPicker
