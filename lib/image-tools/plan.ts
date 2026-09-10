@@ -87,7 +87,7 @@ const ENGINE_SUFFIX: Record<ToolEngineName, string> = {
 
 /**
  * Resolves the encoding format. "auto" keeps the source format, falling back to
- * PNG for sources we can decode but not encode (GIF, BMP).
+ * PNG when the source format is not one we can write.
  */
 export function resolveOutputFormat(
   choice: OutputFormatChoice,

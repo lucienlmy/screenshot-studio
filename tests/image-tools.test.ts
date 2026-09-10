@@ -217,7 +217,7 @@ test("format metadata matches what canvas encoders expect", () => {
 test("formatFromMime is case-insensitive and rejects what we cannot encode", () => {
   assert.equal(formatFromMime("image/PNG"), "png");
   assert.equal(formatFromMime(" image/jpg "), "jpeg");
-  assert.equal(formatFromMime("image/gif"), null);
+  assert.equal(formatFromMime("image/tiff"), null);
   assert.equal(formatFromMime("image/svg+xml"), null);
 });
 
@@ -299,8 +299,8 @@ test("resolveOutputFormat keeps the source format on auto", () => {
 });
 
 test("resolveOutputFormat falls back to PNG for decode-only sources", () => {
-  assert.equal(resolveOutputFormat("auto", "image/gif"), "png");
-  assert.equal(resolveOutputFormat("auto", "image/bmp"), "png");
+  assert.equal(resolveOutputFormat("auto", "image/tiff"), "png");
+  assert.equal(resolveOutputFormat("auto", ""), "png");
 });
 
 test("each batch engine only sends the pipeline the options it uses", () => {

@@ -80,7 +80,7 @@ export function ToolWorkspace({ tool }: ToolWorkspaceProps) {
     let active = true;
     detectEncodeSupport().then((supported) => {
       if (!active) return;
-      const order: RasterFormat[] = ["png", "jpeg", "webp"];
+      const order: RasterFormat[] = ["png", "jpeg", "webp", "avif"];
       setEncodable(order.filter((format) => supported.has(format)));
       setSettings((previous) =>
         previous.format !== "auto" && !supported.has(previous.format)
