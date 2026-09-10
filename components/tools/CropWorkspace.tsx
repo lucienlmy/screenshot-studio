@@ -173,7 +173,7 @@ export function CropWorkspace({ tool }: CropWorkspaceProps) {
         setResult(null);
       } catch {
         toast.error("Could not read that image", {
-          description: "Try a PNG, JPG, WebP, GIF, BMP, or AVIF file.",
+          description: "Try a PNG, JPG, WebP, or AVIF file.",
         });
       }
     },

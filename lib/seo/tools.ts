@@ -124,9 +124,9 @@ export const TOOLS: ToolDefinition[] = [
     engine: "convert",
     name: "Convert Image",
     h1: "Convert Image Format",
-    title: "Convert Image Format Online: PNG, JPG, WebP",
+    title: "Convert Image Format Online: PNG, JPG, WebP, AVIF",
     description:
-      "Convert between PNG, JPG, and WebP in your browser. Batch conversion, quality control, no upload. Free, no signup, no watermark.",
+      "Convert between PNG, JPG, WebP, and AVIF in your browser. Batch conversion, quality control, no upload. Free, no signup, no watermark.",
     keywords: [
       "convert image",
       "image converter",
@@ -140,9 +140,9 @@ export const TOOLS: ToolDefinition[] = [
       "convert image without uploading",
     ],
     intro:
-      "Change an image's format without installing anything. Choose PNG, JPG, or WebP, set the quality, and convert a whole folder at once.",
+      "Change an image's format without installing anything. Choose PNG, JPG, WebP, or AVIF, set the quality, and convert a whole folder at once.",
     features: [
-      "PNG, JPG, and WebP in every direction",
+      "PNG, JPG, WebP, and AVIF in every direction",
       "Quality slider for the lossy formats",
       "Choose the background colour behind transparency",
       "Batch conversion with a single zip download",
@@ -152,7 +152,7 @@ export const TOOLS: ToolDefinition[] = [
       {
         question: "Which formats are supported?",
         answer:
-          "You can read PNG, JPG, WebP, GIF, BMP, and AVIF, and write PNG, JPG, and WebP. WebP writing depends on your browser and is hidden automatically if it is unavailable. AVIF output is not offered because no current browser can encode AVIF from a canvas.",
+          "Drop in PNG, JPG, WebP, or AVIF, and convert to any of the same four. The output picker only ever shows formats your browser can produce, so whatever you pick is what you get.",
       },
       {
         question: "What happens to transparency when I convert to JPG?",
@@ -329,6 +329,7 @@ const CONVERSION_PAGES: {
   toLabel: string;
   why: string;
   keywords: string[];
+  extraFaqs?: ToolFaq[];
 }[] = [
   {
     slug: "/png-to-jpg",
@@ -378,10 +379,58 @@ const CONVERSION_PAGES: {
     why: "JPG is the safest format to hand to software that predates WebP, including many print services and older photo editors.",
     keywords: ["webp to jpg", "webp to jpeg", "convert webp to jpg"],
   },
+  {
+    slug: "/avif-to-jpg",
+    from: "AVIF",
+    to: "jpeg",
+    toLabel: "JPG",
+    why: "AVIF is very efficient but still unsupported by plenty of older apps, editors, and upload forms. JPG is the safest thing to hand them.",
+    keywords: ["avif to jpg", "convert avif to jpg", "avif to jpeg"],
+  },
+  {
+    slug: "/avif-to-png",
+    from: "AVIF",
+    to: "png",
+    toLabel: "PNG",
+    why: "PNG opens anywhere and keeps transparency, which AVIF also supports, so nothing is lost in the move apart from file size.",
+    keywords: ["avif to png", "convert avif to png", "avif to png converter"],
+  },
+  {
+    slug: "/png-to-avif",
+    from: "PNG",
+    to: "avif",
+    toLabel: "AVIF",
+    why: "AVIF is the most efficient image format in wide use and keeps transparency like PNG. A screenshot or graphic converted to AVIF is routinely 80-95% smaller than the PNG it came from.",
+    keywords: ["png to avif", "convert png to avif", "png to avif converter"],
+  },
+  {
+    slug: "/jpg-to-avif",
+    from: "JPG",
+    to: "avif",
+    toLabel: "AVIF",
+    why: "AVIF typically halves a JPG at the same visual quality, which makes it the biggest single page-speed win available for a photo-heavy site.",
+    keywords: ["jpg to avif", "jpeg to avif", "convert jpg to avif"],
+  },
+  {
+    slug: "/webp-to-avif",
+    from: "WebP",
+    to: "avif",
+    toLabel: "AVIF",
+    why: "AVIF usually beats WebP by another 20% or so at matching quality, so it is worth the move for anything you serve at scale.",
+    keywords: ["webp to avif", "convert webp to avif"],
+  },
+  {
+    slug: "/avif-to-webp",
+    from: "AVIF",
+    to: "webp",
+    toLabel: "WebP",
+    why: "WebP is supported by every browser and by plenty of older software that still cannot open AVIF, while staying far smaller than PNG or JPG.",
+    keywords: ["avif to webp", "convert avif to webp"],
+  },
 ];
 
 for (const page of CONVERSION_PAGES) {
-  const { slug, from, to, toLabel, why, keywords } = page;
+  const { slug, from, to, toLabel, why, keywords, extraFaqs } = page;
 
   TOOLS.push({
     slug,
@@ -398,7 +447,7 @@ for (const page of CONVERSION_PAGES) {
       `batch ${from.toLowerCase()} to ${toLabel.toLowerCase()}`,
       "convert image without uploading",
     ],
-    intro: `Turn ${from} files into ${toLabel} without uploading them anywhere. Drop in one image or a whole folder, adjust the quality, and download the results.`,
+    intro: `Turn ${from} files into ${toLabel} without uploading anything. Drop in one image or a whole folder, adjust the quality, and download the results.`,
     features: [
       `${from} to ${toLabel} at full resolution`,
       "Batch conversion with a single zip download",
@@ -411,6 +460,7 @@ for (const page of CONVERSION_PAGES) {
         question: `Why convert ${from} to ${toLabel}?`,
         answer: why,
       },
+      ...(extraFaqs ?? []),
       ...(to === "jpeg"
         ? [
             {

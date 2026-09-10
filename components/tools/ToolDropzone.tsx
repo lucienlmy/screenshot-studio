@@ -1,7 +1,7 @@
 "use client";
 
 import * as React from "react";
-import { useDropzone } from "react-dropzone";
+import { useDropzone, type FileRejection } from "react-dropzone";
 import { Image01Icon, Add01Icon } from "hugeicons-react";
 import { cn } from "@/lib/utils";
 import { TOOL_DROPZONE_ACCEPT } from "./useToolQueue";
@@ -21,9 +21,19 @@ export function ToolDropzone({
   sourceLabel,
   compact = false,
 }: ToolDropzoneProps) {
+  /**
+   * Rejected files are forwarded too, rather than dropped here.
+   *
+   * react-dropzone filters on `accept` before this runs, so anything it turns
+   * away would otherwise vanish with no feedback at all: dropping a lone .tiff
+   * looked like the page was broken, and one bad file in a batch disappeared
+   * unmentioned. The queue is the single place that validates and reports, so
+   * everything is handed to it and it decides what to say.
+   */
   const onDrop = React.useCallback(
-    (accepted: File[]) => {
-      if (accepted.length > 0) onFiles(accepted);
+    (accepted: File[], rejected: FileRejection[]) => {
+      const all = [...accepted, ...rejected.map((entry) => entry.file)];
+      if (all.length > 0) onFiles(all);
     },
     [onFiles]
   );
@@ -79,7 +89,7 @@ export function ToolDropzone({
         or click to browse, {multiple ? "select as many as you like" : "one image at a time"}
       </p>
       <p className="mt-4 text-xs text-muted-foreground">
-        PNG, JPG, WebP, GIF, BMP, AVIF · processed in your browser, never uploaded
+        PNG, JPG, WebP, AVIF · processed in your browser, never uploaded
       </p>
     </div>
   );
