@@ -59,12 +59,12 @@ export function StoreExportDialog({
   project,
   open,
   onOpenChange,
-  onExportComplete,
+  requestId,
 }: {
   project: StoreProject;
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  onExportComplete?: () => void;
+  requestId: number;
 }): React.JSX.Element {
   const [target, setTarget] = React.useState<RenderTarget>({
     profile: STORE_OUTPUT_PROFILES[0],
@@ -73,8 +73,9 @@ export function StoreExportDialog({
   const [isExporting, setIsExporting] = React.useState(false);
   const [progress, setProgress] = React.useState({ current: 0, total: 0 });
   const renderRef = React.useRef<HTMLDivElement>(null);
+  const handledRequestIdRef = React.useRef(0);
 
-  const exportZip = async (): Promise<void> => {
+  const exportZip = React.useCallback(async (): Promise<void> => {
     if (isExporting) return;
     const profile = STORE_OUTPUT_PROFILES[0];
     const total = project.slides.length;
@@ -113,7 +114,6 @@ export function StoreExportDialog({
         description: `${completed} PNG files packaged for App Store Connect.`,
       });
       onOpenChange(false);
-      onExportComplete?.();
     } catch (cause) {
       toast.error("Store export failed", {
         description: cause instanceof Error ? cause.message : "Please try again.",
@@ -121,7 +121,14 @@ export function StoreExportDialog({
     } finally {
       setIsExporting(false);
     }
-  };
+  }, [isExporting, onOpenChange, project]);
+
+  React.useEffect(() => {
+    if (!open || requestId === 0 || handledRequestIdRef.current === requestId) return;
+    handledRequestIdRef.current = requestId;
+    const frame = window.requestAnimationFrame(() => { void exportZip(); });
+    return () => window.cancelAnimationFrame(frame);
+  }, [exportZip, open, requestId]);
 
   const activeSlide = project.slides[target.slideIndex] ?? project.slides[0];
 

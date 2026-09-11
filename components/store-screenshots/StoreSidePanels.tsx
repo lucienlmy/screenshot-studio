@@ -46,14 +46,20 @@ import type {
   StoreDeviceSlot,
   StoreDeviceStyle,
   StoreExtraText,
+  StoreImageTransform,
   StoreProject,
   StoreSlide,
 } from "@/lib/store-screenshots/types";
 import { cn } from "@/lib/utils";
+import { showStoreUndoToast } from "./store-undo-toast";
 
-type GlobalTab = "templates" | "theme";
+type GlobalTab = "layout" | "theme";
 type SlideTab = "content" | "advanced";
 type TextColorScope = "slide" | "all";
+export type StoreTextFocusRequest = {
+  field: "heading" | "subheading";
+  id: number;
+};
 
 function Section({
   title,
@@ -212,7 +218,7 @@ export function StoreGlobalPanel({
   deviceSlot?: StoreDeviceSlot | null;
   embedded?: boolean;
 }): React.JSX.Element {
-  const [tab, setTab] = React.useState<GlobalTab>("templates");
+  const [tab, setTab] = React.useState<GlobalTab>("layout");
   const backgroundInputRef = React.useRef<HTMLInputElement>(null);
   const backgroundRequestIdsRef = React.useRef<Map<string, number>>(new Map());
   const projectRef = React.useRef(project);
@@ -298,7 +304,7 @@ export function StoreGlobalPanel({
           value={tab}
           onChange={(value) => setTab(value as GlobalTab)}
           options={[
-            { id: "templates", icon: <Layers01Icon size={14} />, ariaLabel: "Templates" },
+            { id: "layout", icon: <Layers01Icon size={14} />, ariaLabel: "Layout" },
             { id: "theme", icon: <PaintBoardIcon size={14} />, ariaLabel: "Theme" },
           ]}
         />
@@ -312,7 +318,7 @@ export function StoreGlobalPanel({
         </div>
       </div>
       <div className="min-h-0 flex-1 overflow-y-auto p-4 scrollbar-hide">
-        {tab === "templates" ? (
+        {tab === "layout" ? (
           <div className="space-y-4">
             <Section title="Slide layout">
               <div className="grid grid-cols-2 gap-1.5">
@@ -343,9 +349,9 @@ export function StoreGlobalPanel({
             </Section>
             {selectedSlide && selectedLayoutId !== "no-mockup" ? (
               <>
-                <Section title="Slide treatment">
+                <Section title="Presentation">
                   <div className="space-y-2">
-                    <span className="text-xs text-muted-foreground">Device frame</span>
+                    <span className="text-xs text-muted-foreground">Show as</span>
                     <SegmentedControl
                       size="sm"
                       value={selectedDeviceStyle}
@@ -356,7 +362,7 @@ export function StoreGlobalPanel({
                       ))}
                       options={[
                         { id: "iphone", label: "iPhone" },
-                        { id: "screen-only", label: "Screen" },
+                        { id: "screen-only", label: "Image" },
                       ]}
                     />
                   </div>
@@ -498,13 +504,19 @@ export function StoreGlobalPanel({
                         aria-label="Remove custom slide background"
                         title="Remove custom background"
                         onClick={() => {
+                          const deletedBackground = selectedSlide.backgroundImageOverride;
                           backgroundRequestIdsRef.current.set(
                             selectedSlide.id,
                             (backgroundRequestIdsRef.current.get(selectedSlide.id) ?? 0) + 1,
                           );
                           updateSelectedSlide({ backgroundImageOverride: null });
+                          showStoreUndoToast("Background removed", () => {
+                            onSlideChange(selectedSlide.id, {
+                              backgroundImageOverride: deletedBackground,
+                            });
+                          });
                         }}
-                        className="flex size-7 shrink-0 items-center justify-center rounded-md text-destructive hover:bg-destructive/10"
+                        className="flex size-8 shrink-0 items-center justify-center rounded-md text-destructive hover:bg-destructive/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-destructive/40"
                       >
                         <Cancel01Icon size={13} />
                       </button>
@@ -564,6 +576,9 @@ export function StoreGlobalPanel({
 
 export function StoreSlidePanel({
   slide,
+  screenSlide,
+  screenLabel,
+  usesDeviceFrame,
   slides,
   isDuo,
   theme,
@@ -571,16 +586,23 @@ export function StoreSlidePanel({
   onThemeChange,
   onApplyTextColorToAll,
   onReplace,
+  onCropRequest,
+  textFocusRequest,
   embedded = false,
 }: {
   slide: StoreSlide | null;
+  screenSlide: StoreSlide | null;
+  screenLabel: string;
+  usesDeviceFrame: boolean;
   slides: StoreSlide[];
   isDuo: boolean;
   theme: StoreProject["theme"];
   onChange: (slideId: string, updates: Partial<StoreSlide>) => void;
   onThemeChange: (updates: Partial<StoreProject["theme"]>) => void;
   onApplyTextColorToAll: (key: "headlineColor" | "subheadColor", value: string) => void;
-  onReplace: (file: File) => void;
+  onReplace: (slideId: string, file: File) => void;
+  onCropRequest: (sourceSlideId: string, original: StoreImageTransform) => void;
+  textFocusRequest?: StoreTextFocusRequest | null;
   embedded?: boolean;
 }): React.JSX.Element {
   const [tab, setTab] = React.useState<SlideTab>("content");
@@ -588,8 +610,30 @@ export function StoreSlidePanel({
   const overlayInputRef = React.useRef<HTMLInputElement>(null);
   const overlayRequestIdsRef = React.useRef<Map<string, number>>(new Map());
   const replaceInputRef = React.useRef<HTMLInputElement>(null);
+  const headingInputRef = React.useRef<HTMLTextAreaElement>(null);
+  const subheadingInputRef = React.useRef<HTMLTextAreaElement>(null);
+  const slideRef = React.useRef(slide);
 
-  if (!slide) {
+  React.useEffect(() => {
+    slideRef.current = slide;
+  }, [slide]);
+
+  React.useEffect(() => {
+    if (!textFocusRequest) return;
+    setTab("content");
+    const frame = window.requestAnimationFrame(() => {
+      const input = textFocusRequest.field === "heading"
+        ? headingInputRef.current
+        : subheadingInputRef.current;
+      if (!input || input.offsetParent === null) return;
+      input.focus({ preventScroll: true });
+      input.setSelectionRange(input.value.length, input.value.length);
+      input.scrollIntoView({ block: "nearest", behavior: "smooth" });
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [textFocusRequest]);
+
+  if (!slide || !screenSlide) {
     return (
       <aside
         className={cn(
@@ -637,12 +681,12 @@ export function StoreSlidePanel({
   const rightSlideId = slides.some((candidate) => candidate.id === slide.duoRightSlideId)
     ? slide.duoRightSlideId!
     : fallbackRightSlide.id;
-  const usesDeviceFrame = (slide.deviceStyleOverride ?? theme.deviceStyle) === "iphone";
-  const imageMode = slide.image.mode ?? "fill";
+  const imageMode = screenSlide.image.mode ?? "fill";
   const imageFramingChanged = imageMode !== "fill"
-    || slide.image.scale !== 1
-    || slide.image.offsetX !== 0
-    || slide.image.offsetY !== 0;
+    || screenSlide.image.scale !== 1
+    || screenSlide.image.offsetX !== 0
+    || screenSlide.image.offsetY !== 0;
+  const screenImageLabel = isDuo ? `${screenLabel.toLowerCase()} image` : "image";
 
   return (
     <aside
@@ -674,14 +718,21 @@ export function StoreSlidePanel({
                       type="button"
                       aria-label="Delete heading"
                       title="Delete heading"
-                      onClick={() => update({ headline: "" })}
-                      className="flex size-6 items-center justify-center rounded text-destructive hover:bg-destructive/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-destructive/40"
+                      onClick={() => {
+                        const deletedHeading = slide.headline;
+                        update({ headline: "" });
+                        showStoreUndoToast("Heading deleted", () => {
+                          onChange(slide.id, { headline: deletedHeading });
+                        });
+                      }}
+                      className="flex size-8 items-center justify-center rounded text-destructive hover:bg-destructive/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-destructive/40"
                     >
                       <Cancel01Icon size={12} />
                     </button>
                   ) : null}
                 </div>
                 <textarea
+                  ref={headingInputRef}
                   aria-label="Heading"
                   rows={2}
                   value={slide.headline}
@@ -699,14 +750,21 @@ export function StoreSlidePanel({
                       type="button"
                       aria-label="Delete subheading"
                       title="Delete subheading"
-                      onClick={() => update({ subhead: "" })}
-                      className="flex size-6 items-center justify-center rounded text-destructive hover:bg-destructive/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-destructive/40"
+                      onClick={() => {
+                        const deletedSubheading = slide.subhead;
+                        update({ subhead: "" });
+                        showStoreUndoToast("Subheading deleted", () => {
+                          onChange(slide.id, { subhead: deletedSubheading });
+                        });
+                      }}
+                      className="flex size-8 items-center justify-center rounded text-destructive hover:bg-destructive/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-destructive/40"
                     >
                       <Cancel01Icon size={12} />
                     </button>
                   ) : null}
                 </div>
                 <textarea
+                  ref={subheadingInputRef}
                   aria-label="Subheading"
                   rows={2}
                   value={slide.subhead}
@@ -732,8 +790,19 @@ export function StoreSlidePanel({
                         type="button"
                         aria-label={`Remove text block ${index + 1}`}
                         title="Remove text"
-                        onClick={() => update({ extraTexts: extraTexts.filter((item) => item.id !== text.id) })}
-                        className="flex size-6 items-center justify-center rounded text-destructive hover:bg-destructive/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-destructive/40"
+                        onClick={() => {
+                          update({ extraTexts: extraTexts.filter((item) => item.id !== text.id) });
+                          showStoreUndoToast("Text block removed", () => {
+                            const currentSlide = slideRef.current;
+                            if (!currentSlide || currentSlide.id !== slide.id) return;
+                            const currentTexts = currentSlide.extraTexts ?? [];
+                            if (currentTexts.some((item) => item.id === text.id)) return;
+                            const restoredTexts = [...currentTexts];
+                            restoredTexts.splice(Math.min(index, restoredTexts.length), 0, text);
+                            onChange(slide.id, { extraTexts: restoredTexts });
+                          });
+                        }}
+                        className="flex size-8 items-center justify-center rounded text-destructive hover:bg-destructive/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-destructive/40"
                       >
                         <Cancel01Icon size={12} />
                       </button>
@@ -889,7 +958,7 @@ export function StoreSlidePanel({
                 </div>
               </div>
             </Section>
-            <Section title="Screenshot" compact>
+            <Section title={isDuo ? `${screenLabel} image` : "Screenshot"} compact>
               {isDuo ? (
                 <div className="grid grid-cols-2 gap-2">
                     <label className="flex min-w-0 items-center gap-1.5 text-[10px] text-muted-foreground">
@@ -927,7 +996,7 @@ export function StoreSlidePanel({
                 </div>
               ) : null}
               <Button variant="outline" size="sm" className="w-full text-xs" onClick={() => replaceInputRef.current?.click()}>
-                <Image01Icon size={14} /> Replace image
+                <Image01Icon size={14} /> {screenSlide.src ? `Replace ${screenImageLabel}` : `Upload ${screenImageLabel}`}
               </Button>
               <input
                 ref={replaceInputRef}
@@ -936,18 +1005,18 @@ export function StoreSlidePanel({
                 className="hidden"
                 onChange={(event) => {
                   const file = event.target.files?.[0];
-                  if (file) onReplace(file);
+                  if (file) onReplace(screenSlide.id, file);
                   event.currentTarget.value = "";
                 }}
               />
-              {usesDeviceFrame ? (
+              {screenSlide.src && usesDeviceFrame ? (
                 <>
                   <div className="flex items-center justify-between gap-3 border-t border-foreground/10 pt-3">
                     <span className="text-[10px] font-medium text-muted-foreground">Image framing</span>
                     <button
                       type="button"
                       disabled={!imageFramingChanged}
-                      onClick={() => update({ image: { ...DEFAULT_IMAGE_TRANSFORM } })}
+                      onClick={() => onChange(screenSlide.id, { image: { ...DEFAULT_IMAGE_TRANSFORM } })}
                       className="rounded px-1.5 py-1 text-[10px] font-medium text-muted-foreground transition-colors hover:bg-foreground/[0.05] hover:text-foreground disabled:pointer-events-none disabled:opacity-35"
                     >
                       Reset
@@ -956,12 +1025,11 @@ export function StoreSlidePanel({
                   <SegmentedControl
                     size="sm"
                     value={imageMode}
-                    onChange={(value) => update({
-                      image: {
-                        ...slide.image,
-                        mode: value as StoreSlide["image"]["mode"],
-                      },
-                    })}
+                    onChange={(value) => {
+                      const mode = value as StoreSlide["image"]["mode"];
+                      if (mode === "custom") onCropRequest(screenSlide.id, screenSlide.image);
+                      onChange(screenSlide.id, { image: { ...screenSlide.image, mode } });
+                    }}
                     options={[
                       { id: "fill", label: "Fill" },
                       { id: "fit", label: "Fit" },
@@ -973,14 +1041,18 @@ export function StoreSlidePanel({
                       ? "Fills the screen edge to edge. Some image edges may be cropped."
                       : imageMode === "fit"
                         ? "Shows the complete image at its original aspect ratio."
-                        : "Adjust the image scale and crop position manually."}
+                        : "Drag and zoom directly on the canvas to frame the screen."}
                   </p>
                   {imageMode === "custom" ? (
-                    <div className="space-y-3 rounded-md border border-foreground/10 bg-foreground/[0.025] p-2.5">
-                      <RangeControl label="Scale" value={slide.image.scale} min={0.25} max={4} step={0.01} suffix="×" onChange={(scale) => update({ image: { ...slide.image, mode: "custom", scale } })} />
-                      <RangeControl label="Horizontal" value={slide.image.offsetX} min={-100} max={100} suffix="%" onChange={(offsetX) => update({ image: { ...slide.image, mode: "custom", offsetX } })} />
-                      <RangeControl label="Vertical" value={slide.image.offsetY} min={-100} max={100} suffix="%" onChange={(offsetY) => update({ image: { ...slide.image, mode: "custom", offsetY } })} />
-                    </div>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      className="w-full text-xs"
+                      onClick={() => onCropRequest(screenSlide.id, screenSlide.image)}
+                    >
+                      Edit crop on canvas
+                    </Button>
                   ) : null}
                 </>
               ) : null}
@@ -991,9 +1063,9 @@ export function StoreSlidePanel({
         {tab === "advanced" ? (
           <div className="space-y-1">
             <Section title="Image adjustments" compact>
-              <RangeControl label="Brightness" value={slide.filters.brightness} min={50} max={150} suffix="%" onChange={(brightness) => update({ filters: { ...slide.filters, brightness } })} />
-              <RangeControl label="Contrast" value={slide.filters.contrast} min={50} max={150} suffix="%" onChange={(contrast) => update({ filters: { ...slide.filters, contrast } })} />
-              <RangeControl label="Saturation" value={slide.filters.saturation} min={0} max={180} suffix="%" onChange={(saturation) => update({ filters: { ...slide.filters, saturation } })} />
+              <RangeControl label="Brightness" value={screenSlide.filters.brightness} min={50} max={150} suffix="%" onChange={(brightness) => onChange(screenSlide.id, { filters: { ...screenSlide.filters, brightness } })} />
+              <RangeControl label="Contrast" value={screenSlide.filters.contrast} min={50} max={150} suffix="%" onChange={(contrast) => onChange(screenSlide.id, { filters: { ...screenSlide.filters, contrast } })} />
+              <RangeControl label="Saturation" value={screenSlide.filters.saturation} min={0} max={180} suffix="%" onChange={(saturation) => onChange(screenSlide.id, { filters: { ...screenSlide.filters, saturation } })} />
             </Section>
             <Section title="3D perspective" compact>
               <RangeControl label="Tilt X" value={slide.device.rotateX} min={-25} max={25} suffix="°" onChange={(rotateX) => update({ device: { ...slide.device, rotateX } })} />
@@ -1009,13 +1081,17 @@ export function StoreSlidePanel({
                       type="button"
                       aria-label="Remove overlay"
                       onClick={() => {
+                        const deletedOverlay = slide.overlay;
                         overlayRequestIdsRef.current.set(
                           slide.id,
                           (overlayRequestIdsRef.current.get(slide.id) ?? 0) + 1,
                         );
                         update({ overlay: null });
+                        showStoreUndoToast("Overlay removed", () => {
+                          onChange(slide.id, { overlay: deletedOverlay });
+                        });
                       }}
-                      className="flex size-7 items-center justify-center rounded text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
+                      className="flex size-8 items-center justify-center rounded text-muted-foreground hover:bg-destructive/10 hover:text-destructive focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-destructive/40"
                     >
                       <Cancel01Icon size={14} />
                     </button>
