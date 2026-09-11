@@ -8,6 +8,11 @@ import {
 } from "../lib/store-screenshots/config";
 import { composeStoreSlide, resolveStoreLayout } from "../lib/store-screenshots/layouts";
 import {
+  appendStoreHistory,
+  MAX_STORE_HISTORY_ENTRIES,
+  storeHistoryGroupKey,
+} from "../lib/store-screenshots/history";
+import {
   assertStoreImageBudget,
   assertStoreImageFile,
   createScratchStoreProject,
@@ -60,6 +65,87 @@ test("App Store projects cap slides at the supported maximum", () => {
 
   assert.equal(project.slides.length, MAX_STORE_SLIDES);
   assert.equal(project.selectedSlideId, project.slides[0].id);
+});
+
+test("store history caps retained image data instead of retaining every replacement", () => {
+  const projectWithImage = (src: string, name: string) => createStoreProject([
+    createStoreSlide(`data:image/png;base64,${src}`, name),
+  ]);
+  const active = projectWithImage("DDDD", "active.png");
+  const oldest = projectWithImage("AAAA", "oldest.png");
+  const middle = projectWithImage("BBBB", "middle.png");
+  const newest = projectWithImage("CCCC", "newest.png");
+
+  const history = appendStoreHistory(
+    appendStoreHistory(
+      appendStoreHistory([], oldest, active, 6),
+      middle,
+      active,
+      6,
+    ),
+    newest,
+    active,
+    6,
+  );
+
+  assert.deepEqual(history.map((project) => project.slides[0].name), [
+    "middle.png",
+    "newest.png",
+  ]);
+});
+
+test("store history keeps lightweight edits while enforcing its entry limit", () => {
+  const active = createScratchStoreProject();
+  let history: ReturnType<typeof appendStoreHistory> = [];
+  for (let index = 0; index < MAX_STORE_HISTORY_ENTRIES + 5; index += 1) {
+    history = appendStoreHistory(history, { ...active, updatedAt: index }, active);
+  }
+
+  assert.equal(history.length, MAX_STORE_HISTORY_ENTRIES);
+  assert.equal(history[0].updatedAt, 5);
+});
+
+test("store history groups only repeated edits to the same field", () => {
+  const project = createScratchStoreProject();
+  const slide = project.slides[0];
+  const shadowEdit = {
+    ...project,
+    theme: { ...project.theme, shadow: project.theme.shadow + 1 },
+    updatedAt: project.updatedAt + 1,
+  };
+  const headlineEdit = {
+    ...project,
+    slides: project.slides.map((candidate) => candidate.id === slide.id
+      ? { ...candidate, headline: "Updated" }
+      : candidate),
+    updatedAt: project.updatedAt + 1,
+  };
+  const imageReplacement = {
+    ...project,
+    slides: project.slides.map((candidate) => candidate.id === slide.id
+      ? { ...candidate, src: "data:image/png;base64,AAAA", name: "replacement.png" }
+      : candidate),
+  };
+  const deviceMove = {
+    ...project,
+    slides: project.slides.map((candidate) => candidate.id === slide.id
+      ? {
+          ...candidate,
+          device: {
+            ...candidate.device,
+            offsetX: candidate.device.offsetX + 1,
+            offsetY: candidate.device.offsetY + 1,
+          },
+        }
+      : candidate),
+    updatedAt: project.updatedAt + 1,
+  };
+
+  assert.equal(storeHistoryGroupKey(project, shadowEdit), "theme.shadow");
+  assert.equal(storeHistoryGroupKey(project, headlineEdit), `slides.${slide.id}.headline`);
+  assert.equal(storeHistoryGroupKey(project, deviceMove), `slides.${slide.id}.device`);
+  assert.equal(storeHistoryGroupKey(project, imageReplacement), null);
+  assert.equal(storeHistoryGroupKey(project, { ...project, slides: [] }), null);
 });
 
 test("a new Store Screenshots visit offers a complete editable starter set", () => {

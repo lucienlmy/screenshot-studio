@@ -16,8 +16,10 @@ import {
   FileZipIcon,
   GridIcon,
   NewTwitterIcon,
+  RedoIcon,
   RefreshIcon,
   Settings02Icon,
+  UndoIcon,
 } from "hugeicons-react";
 import { Button } from "@/components/ui/button";
 import {
@@ -41,8 +43,12 @@ import {
 import { GitHubStarButton } from "@/components/ui/github-star-button";
 import { MobileBanner } from "@/components/editor/MobileBanner";
 import { StoreExportDialog } from "./StoreExportDialog";
-import { StoreGlobalPanel, StoreSlidePanel } from "./StoreSidePanels";
-import { StoreSlideCanvas } from "./StoreSlideCanvas";
+import {
+  StoreGlobalPanel,
+  StoreSlidePanel,
+  type StoreTextFocusRequest,
+} from "./StoreSidePanels";
+import { StoreSlideCanvas, type StoreCropRequest } from "./StoreSlideCanvas";
 import { StoreTemplateGallery } from "./StoreTemplateGallery";
 import { StoreWorkspaceLoading } from "./StoreWorkspaceLoading";
 import {
@@ -57,6 +63,7 @@ import {
   duplicateStoreSlide,
   fileToDataUrl,
   filesToStoreSlides,
+  getStoreDeviceStyleOverride,
   MAX_STORE_PROJECT_IMAGE_BYTES,
   moveStoreSlide,
   removeStoreSlide,
@@ -74,10 +81,16 @@ import {
 } from "@/lib/store-screenshots/storage";
 import type {
   StoreDeviceSlot,
+  StoreImageTransform,
   StoreProject,
   StoreSlide,
 } from "@/lib/store-screenshots/types";
+import {
+  appendStoreHistory,
+  storeHistoryGroupKey,
+} from "@/lib/store-screenshots/history";
 import { cn } from "@/lib/utils";
+import { showStoreUndoToast } from "./store-undo-toast";
 
 const PAGE_SIZE = 4;
 
@@ -113,12 +126,20 @@ function StoreStarterChoice({
 function StoreHeader({
   onExport,
   onReset,
+  onUndo,
+  onRedo,
+  canUndo,
+  canRedo,
   resetButtonRef,
   disabled = false,
   showActions = true,
 }: {
   onExport: () => void;
   onReset: () => void;
+  onUndo: () => void;
+  onRedo: () => void;
+  canUndo: boolean;
+  canRedo: boolean;
   resetButtonRef?: React.Ref<HTMLButtonElement>;
   disabled?: boolean;
   showActions?: boolean;
@@ -136,18 +157,45 @@ function StoreHeader({
 
       {showActions ? (
         <>
-          <Button
-            ref={resetButtonRef}
-            type="button"
-            onClick={onReset}
-            disabled={disabled}
-            variant="outline"
-            size="sm"
-            className="absolute left-1/2 h-8 -translate-x-1/2 px-2.5 text-xs text-muted-foreground hover:text-foreground"
-          >
-            <RefreshIcon size={14} />
-            Start over
-          </Button>
+          <div className="absolute left-1/2 flex -translate-x-1/2 items-center gap-1">
+            <Button
+              type="button"
+              onClick={onUndo}
+              disabled={disabled || !canUndo}
+              variant="ghost"
+              size="icon-sm"
+              aria-label="Undo last edit"
+              title="Undo (⌘Z)"
+              className="text-muted-foreground hover:text-foreground"
+            >
+              <UndoIcon size={14} />
+            </Button>
+            <Button
+              type="button"
+              onClick={onRedo}
+              disabled={disabled || !canRedo}
+              variant="ghost"
+              size="icon-sm"
+              aria-label="Redo last edit"
+              title="Redo (⇧⌘Z)"
+              className="text-muted-foreground hover:text-foreground"
+            >
+              <RedoIcon size={14} />
+            </Button>
+            <div className="mx-1 h-4 w-px bg-foreground/10" />
+            <Button
+              ref={resetButtonRef}
+              type="button"
+              onClick={onReset}
+              disabled={disabled}
+              variant="outline"
+              size="sm"
+              className="h-8 px-2.5 text-xs text-muted-foreground hover:text-foreground"
+            >
+              <RefreshIcon size={14} />
+              Start over
+            </Button>
+          </div>
           <div className="flex items-center gap-1.5">
             <Button
               size="sm"
@@ -198,32 +246,66 @@ function SlideCard({
   const profile = getStoreProfile("app-store");
 
   return (
-    <button
-      type="button"
-      disabled={disabled}
-      onClick={onOpen}
-      onKeyDown={(event) => {
-        if (!event.shiftKey || (event.key !== "ArrowLeft" && event.key !== "ArrowRight")) return;
-        event.preventDefault();
-        onMove(event.key === "ArrowLeft" ? -1 : 1);
-      }}
-      aria-label={`Edit screenshot ${index + 1} of ${project.slides.length}`}
-      aria-describedby="store-reorder-instructions"
-      aria-keyshortcuts="Shift+ArrowLeft Shift+ArrowRight"
-      className={cn(
-        "group relative block w-full overflow-hidden border border-foreground/10 bg-card text-left shadow-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-foreground/30",
-        disabled
-          ? "cursor-default rounded-xl"
-          : "rounded-md transition-[transform,border-color,box-shadow] hover:-translate-y-0.5 hover:border-foreground/25",
-      )}
-    >
-      <StoreSlideCanvas project={project} slide={slide} slideIndex={index} profile={profile} className="w-full" />
+    <div className="group relative w-full">
+      <button
+        type="button"
+        disabled={disabled}
+        onClick={onOpen}
+        onKeyDown={(event) => {
+          if (!event.shiftKey || (event.key !== "ArrowLeft" && event.key !== "ArrowRight")) return;
+          event.preventDefault();
+          onMove(event.key === "ArrowLeft" ? -1 : 1);
+        }}
+        aria-label={`Edit screenshot ${index + 1} of ${project.slides.length}`}
+        aria-describedby="store-reorder-instructions"
+        aria-keyshortcuts="Shift+ArrowLeft Shift+ArrowRight"
+        className={cn(
+          "relative block w-full overflow-hidden border border-foreground/10 bg-card text-left shadow-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-foreground/30",
+          disabled
+            ? "cursor-default rounded-xl"
+            : "rounded-md transition-[transform,border-color,box-shadow] hover:-translate-y-0.5 hover:border-foreground/25",
+        )}
+      >
+        <StoreSlideCanvas project={project} slide={slide} slideIndex={index} profile={profile} className="w-full" />
+        {!disabled ? (
+          <span className="absolute inset-x-0 bottom-0 translate-y-full bg-foreground/75 px-2 py-2 text-center text-[10px] font-medium text-background backdrop-blur-sm transition-transform group-hover:translate-y-0 group-focus-within:translate-y-0">
+            Edit screenshot
+          </span>
+        ) : null}
+      </button>
       {!disabled ? (
-        <span className="absolute inset-x-0 bottom-0 translate-y-full bg-foreground/75 px-2 py-2 text-center text-[10px] font-medium text-background backdrop-blur-sm transition-transform group-hover:translate-y-0">
-          Edit screenshot
-        </span>
+        <div className="absolute right-2 top-2 z-20 flex gap-1 rounded-md border border-foreground/10 bg-background/90 p-1 shadow-sm backdrop-blur-sm">
+          <button
+            type="button"
+            disabled={index === 0}
+            onPointerDown={(event) => event.stopPropagation()}
+            onClick={(event) => {
+              event.stopPropagation();
+              onMove(-1);
+            }}
+            aria-label={`Move screenshot ${index + 1} left`}
+            title="Move left"
+            className="flex size-7 items-center justify-center rounded text-muted-foreground hover:bg-foreground/[0.07] hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-foreground/30 disabled:pointer-events-none disabled:opacity-30"
+          >
+            <ArrowLeft02Icon size={13} />
+          </button>
+          <button
+            type="button"
+            disabled={index === project.slides.length - 1}
+            onPointerDown={(event) => event.stopPropagation()}
+            onClick={(event) => {
+              event.stopPropagation();
+              onMove(1);
+            }}
+            aria-label={`Move screenshot ${index + 1} right`}
+            title="Move right"
+            className="flex size-7 items-center justify-center rounded text-muted-foreground hover:bg-foreground/[0.07] hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-foreground/30 disabled:pointer-events-none disabled:opacity-30"
+          >
+            <ArrowRight02Icon size={13} />
+          </button>
+        </div>
       ) : null}
-    </button>
+    </div>
   );
 }
 
@@ -456,6 +538,11 @@ function StoreFocus({
   onDuplicate,
   onDelete,
   onSlideChange,
+  onScreenFile,
+  onScreenDelete,
+  onScreenImageChange,
+  cropRequest,
+  onTextEditRequest,
   onDeviceSelect,
   selectedDeviceSlot,
   canAdd,
@@ -472,6 +559,11 @@ function StoreFocus({
   onDuplicate: () => void;
   onDelete: () => void;
   onSlideChange: (slide: StoreSlide) => void;
+  onScreenFile: (sourceSlideId: string, file: File) => void;
+  onScreenDelete: (sourceSlideId: string) => void;
+  onScreenImageChange: (sourceSlideId: string, image: StoreImageTransform) => void;
+  cropRequest: StoreCropRequest | null;
+  onTextEditRequest: (field: "heading" | "subheading") => void;
   onDeviceSelect: (slot: StoreDeviceSlot | null) => void;
   selectedDeviceSlot: StoreDeviceSlot | null;
   canAdd: boolean;
@@ -505,6 +597,11 @@ function StoreFocus({
             style={{ width: "clamp(220px, calc(46.025vh - 92px), 500px)" }}
             interactive
             onSlideChange={onSlideChange}
+            onScreenFile={onScreenFile}
+            onScreenDelete={onScreenDelete}
+            onScreenImageChange={onScreenImageChange}
+            cropRequest={cropRequest}
+            onTextEditRequest={onTextEditRequest}
             onDeviceSelect={onDeviceSelect}
             selectedDeviceSlot={selectedDeviceSlot}
           />
@@ -646,6 +743,7 @@ export function StoreScreenshotWorkspace({
   const [view, setView] = React.useState<"overview" | "focus">("focus");
   const [page, setPage] = React.useState(0);
   const [exportOpen, setExportOpen] = React.useState(false);
+  const [exportRequestId, setExportRequestId] = React.useState(0);
   const [resetDialogOpen, setResetDialogOpen] = React.useState(false);
   const [showStarterChoice, setShowStarterChoice] = React.useState(false);
   const [templateGalleryOpen, setTemplateGalleryOpen] = React.useState(false);
@@ -653,6 +751,9 @@ export function StoreScreenshotWorkspace({
   const [controlsOpen, setControlsOpen] = React.useState(false);
   const [responsivePanel, setResponsivePanel] = React.useState<"design" | "content">("content");
   const [reorderAnnouncement, setReorderAnnouncement] = React.useState("");
+  const [textFocusRequest, setTextFocusRequest] = React.useState<StoreTextFocusRequest | null>(null);
+  const [cropRequest, setCropRequest] = React.useState<StoreCropRequest | null>(null);
+  const [historyAvailability, setHistoryAvailability] = React.useState({ canUndo: false, canRedo: false });
   const addInputRef = React.useRef<HTMLInputElement>(null);
   const resetButtonRef = React.useRef<HTMLButtonElement>(null);
   const saveErrorShownRef = React.useRef(false);
@@ -664,29 +765,76 @@ export function StoreScreenshotWorkspace({
   const projectGenerationRef = React.useRef(0);
   const persistenceGenerationRef = React.useRef(0);
   const replacementRequestIdsRef = React.useRef<Map<string, number>>(new Map());
+  const undoStackRef = React.useRef<StoreProject[]>([]);
+  const redoStackRef = React.useRef<StoreProject[]>([]);
+  const historyGroupKeyRef = React.useRef<string | null>(null);
+  const historyTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const setCurrentProject = React.useCallback((next: StoreProject | null): void => {
+  const syncHistoryAvailability = React.useCallback((): void => {
+    setHistoryAvailability({
+      canUndo: undoStackRef.current.length > 0,
+      canRedo: redoStackRef.current.length > 0,
+    });
+  }, []);
+
+  const closeHistoryGroup = React.useCallback((): void => {
+    historyGroupKeyRef.current = null;
+    if (historyTimerRef.current) {
+      clearTimeout(historyTimerRef.current);
+      historyTimerRef.current = null;
+    }
+  }, []);
+
+  const clearHistory = React.useCallback((): void => {
+    closeHistoryGroup();
+    undoStackRef.current = [];
+    redoStackRef.current = [];
+    syncHistoryAvailability();
+  }, [closeHistoryGroup, syncHistoryAvailability]);
+
+  const setCurrentProject = React.useCallback((
+    next: StoreProject | null,
+    historyMode: "record" | "skip" = "record",
+  ): void => {
+    const previous = projectRef.current;
+    if (historyMode === "record" && previous && next && previous !== next) {
+      const groupKey = storeHistoryGroupKey(previous, next);
+      if (!groupKey || historyGroupKeyRef.current !== groupKey) {
+        undoStackRef.current = appendStoreHistory(undoStackRef.current, previous, next);
+      }
+      redoStackRef.current = [];
+      closeHistoryGroup();
+      if (groupKey) {
+        historyGroupKeyRef.current = groupKey;
+        historyTimerRef.current = setTimeout(() => {
+          historyGroupKeyRef.current = null;
+          historyTimerRef.current = null;
+        }, 500);
+      }
+      syncHistoryAvailability();
+    }
     projectRef.current = next;
     setProject(next);
-  }, []);
+  }, [closeHistoryGroup, syncHistoryAvailability]);
 
   React.useEffect(() => {
     let active = true;
     void loadStoreProject().then((savedProject) => {
       if (!active) return;
       if (savedProject) {
-        setCurrentProject(savedProject);
+        setCurrentProject(savedProject, "skip");
         setShowStarterChoice(false);
         setView("focus");
       } else {
-        setCurrentProject(createStarterStoreProject());
+        setCurrentProject(createStarterStoreProject(), "skip");
         setShowStarterChoice(true);
         setView("overview");
       }
+      clearHistory();
       setLoaded(true);
     });
     return () => { active = false; };
-  }, [setCurrentProject]);
+  }, [clearHistory, setCurrentProject]);
 
   const queueProjectSave = React.useCallback((projectToSave: StoreProject): void => {
     const persistenceGeneration = persistenceGenerationRef.current;
@@ -696,7 +844,9 @@ export function StoreScreenshotWorkspace({
       .then(() => saveStoreProject(projectToSave));
     saveQueueRef.current = save;
     void save
-      .then(() => { saveErrorShownRef.current = false; })
+      .then(() => {
+        saveErrorShownRef.current = false;
+      })
       .catch(() => {
         if (persistenceGeneration !== persistenceGenerationRef.current) return;
         const pending = pendingProjectRef.current;
@@ -743,6 +893,10 @@ export function StoreScreenshotWorkspace({
     };
   }, [flushPendingSave, loaded, project, showStarterChoice]);
 
+  React.useEffect(() => () => {
+    if (historyTimerRef.current) clearTimeout(historyTimerRef.current);
+  }, []);
+
   React.useEffect(() => {
     const handleVisibilityChange = (): void => {
       if (document.visibilityState === "hidden") flushPendingSave();
@@ -779,6 +933,50 @@ export function StoreScreenshotWorkspace({
     setCurrentProject({ ...next, updatedAt: Date.now() });
   }, [setCurrentProject]);
 
+  const undo = React.useCallback((): void => {
+    const current = projectRef.current;
+    const previous = undoStackRef.current.at(-1);
+    if (!current || !previous) return;
+    closeHistoryGroup();
+    undoStackRef.current = undoStackRef.current.slice(0, -1);
+    const restored = { ...previous, updatedAt: Date.now() };
+    redoStackRef.current = appendStoreHistory(redoStackRef.current, current, restored);
+    setCurrentProject(restored, "skip");
+    setShowStarterChoice(false);
+    syncHistoryAvailability();
+  }, [closeHistoryGroup, setCurrentProject, syncHistoryAvailability]);
+
+  const redo = React.useCallback((): void => {
+    const current = projectRef.current;
+    const next = redoStackRef.current.at(-1);
+    if (!current || !next) return;
+    closeHistoryGroup();
+    redoStackRef.current = redoStackRef.current.slice(0, -1);
+    const restored = { ...next, updatedAt: Date.now() };
+    undoStackRef.current = appendStoreHistory(undoStackRef.current, current, restored);
+    setCurrentProject(restored, "skip");
+    setShowStarterChoice(false);
+    syncHistoryAvailability();
+  }, [closeHistoryGroup, setCurrentProject, syncHistoryAvailability]);
+
+  React.useEffect(() => {
+    const handleHistoryShortcut = (event: KeyboardEvent): void => {
+      if (!(event.metaKey || event.ctrlKey) || event.key.toLowerCase() !== "z") return;
+      const target = event.target;
+      if (target instanceof HTMLElement && (
+        target.isContentEditable
+        || target instanceof HTMLInputElement
+        || target instanceof HTMLTextAreaElement
+        || target instanceof HTMLSelectElement
+      )) return;
+      event.preventDefault();
+      if (event.shiftKey) redo();
+      else undo();
+    };
+    window.addEventListener("keydown", handleHistoryShortcut);
+    return () => window.removeEventListener("keydown", handleHistoryShortcut);
+  }, [redo, undo]);
+
   if (!loaded) {
     return <StoreWorkspaceLoading variant={initialHasSavedProject ? "editor" : "templates"} />;
   }
@@ -789,9 +987,31 @@ export function StoreScreenshotWorkspace({
 
   const selectedSlide = project.slides.find((slide) => slide.id === project.selectedSlideId)
     ?? project.slides[0];
+  const selectedSlideIndex = project.slides.findIndex((slide) => slide.id === selectedSlide.id);
+  const selectedLayoutId = resolveStoreLayout(
+    project.templateId,
+    selectedSlideIndex,
+    selectedSlide.layoutOverride,
+  );
+  const selectedDeviceSlot = selectedLayoutId === "duo" && activeDeviceSlot === "secondary"
+    ? "secondary"
+    : "primary";
+  const fallbackRightSlide = project.slides[(selectedSlideIndex + 1) % project.slides.length]
+    ?? selectedSlide;
+  const selectedScreenSlide = selectedLayoutId === "duo"
+    ? selectedDeviceSlot === "secondary"
+      ? project.slides.find((slide) => slide.id === selectedSlide.duoRightSlideId) ?? fallbackRightSlide
+      : project.slides.find((slide) => slide.id === selectedSlide.duoLeftSlideId) ?? selectedSlide
+    : selectedSlide;
+  const selectedScreenLabel = selectedLayoutId === "duo"
+    ? selectedDeviceSlot === "secondary" ? "Right" : "Left"
+    : "Screenshot";
+  const selectedScreenUsesDeviceFrame = (
+    getStoreDeviceStyleOverride(selectedSlide, selectedDeviceSlot) ?? project.theme.deviceStyle
+  ) === "iphone";
 
   const selectSlide = (id: string, focus = true): void => {
-    commitProject({ ...project, selectedSlideId: id });
+    setCurrentProject({ ...project, selectedSlideId: id, updatedAt: Date.now() }, "skip");
     setActiveDeviceSlot("primary");
     if (focus) setView("focus");
   };
@@ -911,7 +1131,8 @@ export function StoreScreenshotWorkspace({
 
   const applyAppTemplate = (templateProject: StoreProject): void => {
     projectGenerationRef.current += 1;
-    setCurrentProject(templateProject);
+    clearHistory();
+    setCurrentProject(templateProject, "skip");
     queueProjectSave(templateProject);
     setActiveDeviceSlot("primary");
     setTemplateGalleryOpen(false);
@@ -931,7 +1152,8 @@ export function StoreScreenshotWorkspace({
   const startFromScratch = (): void => {
     projectGenerationRef.current += 1;
     const scratchProject = createScratchStoreProject();
-    setCurrentProject(scratchProject);
+    clearHistory();
+    setCurrentProject(scratchProject, "skip");
     setShowStarterChoice(false);
     setActiveDeviceSlot("primary");
     setView("focus");
@@ -973,14 +1195,15 @@ export function StoreScreenshotWorkspace({
     }
   };
 
-  const removeProject = (): Promise<void> => {
+  const removeProject = (clearEditorHistory = true): Promise<void> => {
     persistenceGenerationRef.current += 1;
+    if (clearEditorHistory) clearHistory();
     pendingProjectRef.current = null;
     if (saveTimerRef.current) {
       clearTimeout(saveTimerRef.current);
       saveTimerRef.current = null;
     }
-    setCurrentProject(createStarterStoreProject());
+    setCurrentProject(createStarterStoreProject(), "skip");
     setShowStarterChoice(true);
     setActiveDeviceSlot("primary");
     setView("overview");
@@ -999,13 +1222,70 @@ export function StoreScreenshotWorkspace({
   };
 
   const deleteSelectedSlide = (): void => {
+    const deletedSlide = selectedSlide;
+    const deletedIndex = project.slides.findIndex((slide) => slide.id === deletedSlide.id);
+    const deletionGeneration = projectGenerationRef.current;
     const nextProject = removeStoreSlide(project, selectedSlide.id);
+    let clearedProject: StoreProject | null = null;
     if (!nextProject) {
-      void removeProject();
-      return;
+      void removeProject(false);
+      clearedProject = projectRef.current;
+    } else {
+      commitProject(nextProject);
+      setActiveDeviceSlot("primary");
     }
-    commitProject(nextProject);
-    setActiveDeviceSlot("primary");
+
+    showStoreUndoToast("Screenshot deleted", () => {
+      if (projectGenerationRef.current !== deletionGeneration) {
+        toast.error("Could not restore this screenshot", {
+          description: "The screenshot set has been replaced.",
+        });
+        return;
+      }
+      const current = projectRef.current;
+      if (!current || current.slides.some((slide) => slide.id === deletedSlide.id)) return;
+
+      const restoringClearedProject = clearedProject !== null && current === clearedProject;
+      if (restoringClearedProject) {
+        const restoredProject = { ...project, updatedAt: Date.now() };
+        setCurrentProject(restoredProject, "skip");
+        setShowStarterChoice(false);
+        setView("focus");
+        setActiveDeviceSlot("primary");
+        return;
+      }
+
+      if (current.slides.length >= MAX_STORE_SLIDES) {
+        toast.error("Could not restore this screenshot", {
+          description: `A project can contain up to ${MAX_STORE_SLIDES} screenshots.`,
+        });
+        return;
+      }
+
+      try {
+        assertStoreImageBudget(
+          storeSlidesImageBytes(current.slides),
+          storeSlideImageBytes(deletedSlide),
+        );
+      } catch (cause) {
+        toast.error("Could not restore this screenshot", {
+          description: cause instanceof Error ? cause.message : "Remove another image and try again.",
+        });
+        return;
+      }
+
+      const slides = [...current.slides];
+      slides.splice(Math.min(deletedIndex, slides.length), 0, deletedSlide);
+      setCurrentProject({
+        ...current,
+        slides,
+        selectedSlideId: deletedSlide.id,
+        updatedAt: Date.now(),
+      }, "skip");
+      setShowStarterChoice(false);
+      setView("focus");
+      setActiveDeviceSlot("primary");
+    });
   };
 
   const reset = (): void => {
@@ -1020,8 +1300,8 @@ export function StoreScreenshotWorkspace({
     }
   };
 
-  const replaceSelectedImage = (file: File): void => {
-    const slideId = selectedSlide.id;
+  const replaceImage = (file: File, slideId: string): void => {
+    const sourceSlide = project.slides.find((candidate) => candidate.id === slideId) ?? selectedSlide;
     const projectGeneration = projectGenerationRef.current;
     const requestId = (replacementRequestIdsRef.current.get(slideId) ?? 0) + 1;
     replacementRequestIdsRef.current.set(slideId, requestId);
@@ -1030,7 +1310,7 @@ export function StoreScreenshotWorkspace({
         assertStoreImageBudget(
           storeSlidesImageBytes(project.slides),
           file.size,
-          storeDataUrlBytes(selectedSlide.src),
+          storeDataUrlBytes(sourceSlide.src),
         );
         const src = await fileToDataUrl(file);
         if (projectGenerationRef.current !== projectGeneration) return;
@@ -1061,6 +1341,63 @@ export function StoreScreenshotWorkspace({
     })();
   };
 
+  const replaceScreenImage = (sourceSlideId: string, file: File): void => {
+    replaceImage(file, sourceSlideId);
+  };
+
+  const deleteScreenImage = (sourceSlideId: string): void => {
+    const sourceSlide = projectRef.current?.slides.find((slide) => slide.id === sourceSlideId);
+    if (!sourceSlide || !sourceSlide.src) return;
+    const deletedImage = {
+      src: sourceSlide.src,
+      name: sourceSlide.name,
+      image: { ...sourceSlide.image },
+    };
+
+    patchSlide(sourceSlideId, {
+      src: "",
+      name: "Empty screen",
+      image: { mode: "fill", scale: 1, offsetX: 0, offsetY: 0 },
+    });
+
+    showStoreUndoToast("Screen image deleted", () => {
+      const current = projectRef.current;
+      const currentSlide = current?.slides.find((slide) => slide.id === sourceSlideId);
+      if (!current || !currentSlide) return;
+      setCurrentProject({
+        ...current,
+        slides: current.slides.map((slide) => slide.id === sourceSlideId
+          ? { ...slide, ...deletedImage }
+          : slide),
+        updatedAt: Date.now(),
+      }, "skip");
+    });
+  };
+
+  const updateScreenImage = (sourceSlideId: string, image: StoreImageTransform): void => {
+    patchSlide(sourceSlideId, { image });
+  };
+
+  const requestScreenCrop = (sourceSlideId: string, original: StoreImageTransform): void => {
+    setControlsOpen(false);
+    setCropRequest((current) => ({
+      id: (current?.id ?? 0) + 1,
+      sourceSlideId,
+      original,
+    }));
+  };
+
+  const focusCopyField = (field: "heading" | "subheading"): void => {
+    setResponsivePanel("content");
+    if (window.innerWidth < 1280) setControlsOpen(true);
+    setTextFocusRequest((current) => ({ field, id: (current?.id ?? 0) + 1 }));
+  };
+
+  const beginExport = (): void => {
+    setExportRequestId((current) => current + 1);
+    setExportOpen(true);
+  };
+
   return (
     <div className="flex h-screen flex-col overflow-hidden bg-background">
       <p id="store-reorder-instructions" className="sr-only">
@@ -1071,8 +1408,12 @@ export function StoreScreenshotWorkspace({
       </p>
       <MobileBanner />
       <StoreHeader
-        onExport={() => setExportOpen(true)}
+        onExport={beginExport}
         onReset={() => setResetDialogOpen(true)}
+        onUndo={undo}
+        onRedo={redo}
+        canUndo={historyAvailability.canUndo}
+        canRedo={historyAvailability.canRedo}
         resetButtonRef={resetButtonRef}
         showActions={!showStarterChoice && !templateGalleryOpen}
       />
@@ -1122,6 +1463,11 @@ export function StoreScreenshotWorkspace({
                 onDuplicate={duplicateSelectedSlide}
                 onDelete={deleteSelectedSlide}
                 onSlideChange={updateSlide}
+                onScreenFile={replaceScreenImage}
+                onScreenDelete={deleteScreenImage}
+                onScreenImageChange={updateScreenImage}
+                cropRequest={cropRequest}
+                onTextEditRequest={focusCopyField}
                 onDeviceSelect={setActiveDeviceSlot}
                 selectedDeviceSlot={activeDeviceSlot}
                 canAdd={project.slides.length < MAX_STORE_SLIDES}
@@ -1134,12 +1480,11 @@ export function StoreScreenshotWorkspace({
         {!showStarterChoice && !templateGalleryOpen ? (
           <StoreSlidePanel
             slide={selectedSlide}
+            screenSlide={selectedScreenSlide}
+            screenLabel={selectedScreenLabel}
+            usesDeviceFrame={selectedScreenUsesDeviceFrame}
             slides={project.slides}
-            isDuo={resolveStoreLayout(
-              project.templateId,
-              project.slides.findIndex((slide) => slide.id === selectedSlide.id),
-              selectedSlide.layoutOverride,
-            ) === "duo"}
+            isDuo={selectedLayoutId === "duo"}
             theme={project.theme}
             onChange={patchSlide}
             onThemeChange={(updates) => commitProject({
@@ -1147,7 +1492,9 @@ export function StoreScreenshotWorkspace({
               theme: { ...project.theme, ...updates },
             })}
             onApplyTextColorToAll={applyTextColorToAll}
-            onReplace={replaceSelectedImage}
+            onReplace={(slideId, file) => replaceImage(file, slideId)}
+            onCropRequest={requestScreenCrop}
+            textFocusRequest={textFocusRequest}
           />
         ) : null}
       </div>
@@ -1169,10 +1516,7 @@ export function StoreScreenshotWorkspace({
         project={project}
         open={exportOpen}
         onOpenChange={setExportOpen}
-        onExportComplete={() => {
-          projectGenerationRef.current += 1;
-          void removeProject();
-        }}
+        requestId={exportRequestId}
       />
 
       <AlertDialog open={resetDialogOpen} onOpenChange={handleResetDialogOpenChange}>
@@ -1241,12 +1585,11 @@ export function StoreScreenshotWorkspace({
             ) : (
               <StoreSlidePanel
                 slide={selectedSlide}
+                screenSlide={selectedScreenSlide}
+                screenLabel={selectedScreenLabel}
+                usesDeviceFrame={selectedScreenUsesDeviceFrame}
                 slides={project.slides}
-                isDuo={resolveStoreLayout(
-                  project.templateId,
-                  project.slides.findIndex((slide) => slide.id === selectedSlide.id),
-                  selectedSlide.layoutOverride,
-                ) === "duo"}
+                isDuo={selectedLayoutId === "duo"}
                 theme={project.theme}
                 onChange={patchSlide}
                 onThemeChange={(updates) => commitProject({
@@ -1254,7 +1597,9 @@ export function StoreScreenshotWorkspace({
                   theme: { ...project.theme, ...updates },
                 })}
                 onApplyTextColorToAll={applyTextColorToAll}
-                onReplace={replaceSelectedImage}
+                onReplace={(slideId, file) => replaceImage(file, slideId)}
+                onCropRequest={requestScreenCrop}
+                textFocusRequest={textFocusRequest}
                 embedded
               />
             )}
@@ -1270,7 +1615,7 @@ export function StoreScreenshotWorkspace({
           {view === "overview" ? <ArrowRight02Icon size={14} /> : <GridIcon size={14} />}
           {view === "overview" ? "Edit" : "Overview"}
         </Button>
-        <Button className="md:hidden" size="sm" onClick={() => setExportOpen(true)}><FileZipIcon size={14} /> Export</Button>
+        <Button className="md:hidden" size="sm" onClick={beginExport}><FileZipIcon size={14} /> Export</Button>
       </div>
     </div>
   );

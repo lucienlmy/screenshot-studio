@@ -1,7 +1,7 @@
 "use client";
 
 import * as React from "react";
-import { DeviceShell } from "@/components/mockups/DeviceShell";
+import { CropGridOverlay, DeviceShell } from "@/components/mockups/DeviceShell";
 import { getMockupDefinition } from "@/lib/constants/mockups";
 import { backgroundToCss } from "@/lib/store-screenshots/config";
 import { composeStoreSlide, resolveStoreLayout } from "@/lib/store-screenshots/layouts";
@@ -14,6 +14,7 @@ import type {
   StoreDeviceSlot,
   StoreDeviceStyle,
   StoreDeviceTransform,
+  StoreImageTransform,
   StoreOutputProfile,
   StoreProject,
   StoreSlide,
@@ -58,6 +59,25 @@ interface DeviceInteractionState {
   origin: StoreDeviceTransform;
 }
 
+interface ScreenCropSession {
+  slot: StoreDeviceSlot;
+  sourceSlideId: string;
+  original: StoreImageTransform;
+}
+
+interface ScreenCropDragState {
+  pointerId: number;
+  startX: number;
+  startY: number;
+  origin: StoreImageTransform;
+}
+
+export interface StoreCropRequest {
+  id: number;
+  sourceSlideId: string;
+  original: StoreImageTransform;
+}
+
 const clamp = (value: number, min: number, max: number): number =>
   Math.min(max, Math.max(min, value));
 
@@ -69,6 +89,7 @@ function useImageAspectRatio(src: string, fallback: number): number {
   );
 
   React.useEffect(() => {
+    if (!src) return;
     const cached = imageAspectRatioCache.get(src);
     if (cached) {
       setAspectRatio(cached);
@@ -117,15 +138,78 @@ function screenContent(slide: StoreSlide): DeviceScreenContent {
   };
 }
 
-function ScreenOnly({ slide }: { slide: StoreSlide }): React.JSX.Element {
+function ScreenOnly({
+  slide,
+  interactive = false,
+  onFile,
+}: {
+  slide: StoreSlide;
+  interactive?: boolean;
+  onFile?: (file: File) => void;
+}): React.JSX.Element {
+  const inputRef = React.useRef<HTMLInputElement>(null);
+  const content = screenContent(slide);
+
+  if (!slide.src && interactive) {
+    return (
+      <div
+        className="pointer-events-auto relative h-full w-full overflow-hidden rounded-[2cqw] border border-dashed border-foreground/25 bg-background/55 shadow-sm backdrop-blur-sm"
+        onDragOver={(event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          event.dataTransfer.dropEffect = "copy";
+        }}
+        onDrop={(event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          const file = Array.from(event.dataTransfer.files).find((item) => item.type.startsWith("image/"));
+          if (file) onFile?.(file);
+        }}
+      >
+        <button
+          type="button"
+          aria-label="Upload a new screen image"
+          onClick={() => inputRef.current?.click()}
+          className="flex h-full w-full flex-col items-center justify-center gap-[2cqw] px-[8%] text-center text-foreground/65 transition-colors hover:bg-foreground/[0.04] hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-foreground/30"
+        >
+          <span className="flex size-[8cqw] min-h-8 min-w-8 items-center justify-center rounded-full border border-foreground/15 bg-background shadow-sm">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" aria-hidden="true">
+              <path d="M12 5v14M5 12h14" />
+            </svg>
+          </span>
+          <span className="text-[clamp(9px,2.2cqw,14px)] font-medium leading-tight">Upload screen image</span>
+          <span className="text-[clamp(7px,1.5cqw,11px)] leading-tight text-muted-foreground">Click or drop an image here</span>
+        </button>
+        <input
+          ref={inputRef}
+          type="file"
+          accept="image/png,image/jpeg,image/webp"
+          className="hidden"
+          onChange={(event) => {
+            const file = event.target.files?.[0];
+            if (file) onFile?.(file);
+            event.currentTarget.value = "";
+          }}
+        />
+      </div>
+    );
+  }
+
   return (
     <div className="relative h-full w-full overflow-hidden">
-      <img
-        src={slide.src}
-        alt=""
-        draggable={false}
-        className="block h-full w-full select-none object-contain"
-      />
+      {slide.src ? (
+        <img
+          src={slide.src}
+          alt=""
+          draggable={false}
+          className="block h-full w-full select-none"
+          style={{
+            objectFit: content.fit,
+            transform: `translate(${content.offset.x}%, ${content.offset.y}%) scale(${content.scale})`,
+            transformOrigin: "center",
+          }}
+        />
+      ) : null}
     </div>
   );
 }
@@ -133,13 +217,41 @@ function ScreenOnly({ slide }: { slide: StoreSlide }): React.JSX.Element {
 function StoreDevice({
   slide,
   style,
+  interactive = false,
+  cropping = false,
+  onScreenFile,
+  onScreenPointerDown,
+  onScreenPointerMove,
+  onScreenPointerUp,
+  onScreenPointerCancel,
+  onScreenKeyDown,
 }: {
   slide: StoreSlide;
   style: StoreDeviceStyle;
+  interactive?: boolean;
+  cropping?: boolean;
+  onScreenFile?: (file: File) => void;
+  onScreenPointerDown?: React.PointerEventHandler<HTMLDivElement>;
+  onScreenPointerMove?: React.PointerEventHandler<HTMLDivElement>;
+  onScreenPointerUp?: React.PointerEventHandler<HTMLDivElement>;
+  onScreenPointerCancel?: React.PointerEventHandler<HTMLDivElement>;
+  onScreenKeyDown?: React.KeyboardEventHandler<HTMLDivElement>;
 }): React.JSX.Element {
   const definition = resolveDeviceDefinition(style);
-  if (!definition) return <ScreenOnly slide={slide} />;
-  return <DeviceShell definition={definition} screen={screenContent(slide)} />;
+  if (!definition) return <ScreenOnly slide={slide} interactive={interactive} onFile={onScreenFile} />;
+  return (
+    <DeviceShell
+      definition={definition}
+      screen={screenContent(slide)}
+      editing={cropping}
+      onScreenFile={interactive ? onScreenFile : undefined}
+      onScreenPointerDown={cropping ? onScreenPointerDown : undefined}
+      onScreenPointerMove={cropping ? onScreenPointerMove : undefined}
+      onScreenPointerUp={cropping ? onScreenPointerUp : undefined}
+      onScreenPointerCancel={cropping ? onScreenPointerCancel : undefined}
+      onScreenKeyDown={cropping ? onScreenKeyDown : undefined}
+    />
+  );
 }
 
 export const StoreSlideCanvas = React.memo(function StoreSlideCanvas({
@@ -154,6 +266,11 @@ export const StoreSlideCanvas = React.memo(function StoreSlideCanvas({
   onSlideChange,
   onDeviceSelect,
   selectedDeviceSlot,
+  onScreenFile,
+  onScreenDelete,
+  onScreenImageChange,
+  cropRequest,
+  onTextEditRequest,
 }: {
   project: StoreProject;
   slide: StoreSlide;
@@ -166,10 +283,19 @@ export const StoreSlideCanvas = React.memo(function StoreSlideCanvas({
   onSlideChange?: (slide: StoreSlide) => void;
   onDeviceSelect?: (slot: StoreDeviceSlot | null) => void;
   selectedDeviceSlot?: StoreDeviceSlot | null;
+  onScreenFile?: (sourceSlideId: string, file: File) => void;
+  onScreenDelete?: (sourceSlideId: string) => void;
+  onScreenImageChange?: (sourceSlideId: string, image: StoreImageTransform) => void;
+  cropRequest?: StoreCropRequest | null;
+  onTextEditRequest?: (field: "heading" | "subheading") => void;
 }): React.JSX.Element {
   const canvasRef = React.useRef<HTMLDivElement>(null);
   const dragRef = React.useRef<TextDragState | null>(null);
+  const textPointerMovedRef = React.useRef(false);
   const deviceInteractionRef = React.useRef<DeviceInteractionState | null>(null);
+  const screenCropDragRef = React.useRef<ScreenCropDragState | null>(null);
+  const handledCropRequestRef = React.useRef(0);
+  const [screenCropSession, setScreenCropSession] = React.useState<ScreenCropSession | null>(null);
   const layoutId = resolveStoreLayout(project.templateId, slideIndex, slide.layoutOverride);
   const composition = composeStoreSlide(layoutId);
   const defaultDeviceStyle = project.theme.deviceStyle;
@@ -192,6 +318,32 @@ export const StoreSlideCanvas = React.memo(function StoreSlideCanvas({
   const primaryImageAspect = useImageAspectRatio(primarySlide.src, fallbackScreenAspect);
   const secondaryImageAspect = useImageAspectRatio(secondarySlide.src, fallbackScreenAspect);
 
+  React.useEffect(() => {
+    if (!screenCropSession) return;
+    const handleKeyDown = (event: KeyboardEvent): void => {
+      if (event.key !== "Escape") return;
+      onScreenImageChange?.(screenCropSession.sourceSlideId, screenCropSession.original);
+      setScreenCropSession(null);
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [onScreenImageChange, screenCropSession]);
+
+  React.useEffect(() => {
+    if (!cropRequest || handledCropRequestRef.current === cropRequest.id) return;
+    const slot = primarySlide.id === cropRequest.sourceSlideId
+      ? "primary"
+      : secondarySlide.id === cropRequest.sourceSlideId ? "secondary" : null;
+    if (!slot) return;
+    handledCropRequestRef.current = cropRequest.id;
+    onDeviceSelect?.(slot);
+    setScreenCropSession({
+      slot,
+      sourceSlideId: cropRequest.sourceSlideId,
+      original: cropRequest.original,
+    });
+  }, [cropRequest, onDeviceSelect, primarySlide.id, secondarySlide.id]);
+
   const beginTextDrag = (
     event: React.PointerEvent<HTMLElement>,
     target: TextDragTarget,
@@ -200,6 +352,7 @@ export const StoreSlideCanvas = React.memo(function StoreSlideCanvas({
     event.preventDefault();
     event.stopPropagation();
     onDeviceSelect?.(null);
+    textPointerMovedRef.current = false;
     event.currentTarget.setPointerCapture(event.pointerId);
     dragRef.current = {
       pointerId: event.pointerId,
@@ -211,6 +364,93 @@ export const StoreSlideCanvas = React.memo(function StoreSlideCanvas({
 
   const selectDevice = (slot: StoreDeviceSlot): void => {
     onDeviceSelect?.(slot);
+  };
+
+  const startScreenCrop = (
+    event: React.MouseEvent<HTMLButtonElement>,
+    slot: StoreDeviceSlot,
+    source: StoreSlide,
+  ): void => {
+    event.preventDefault();
+    event.stopPropagation();
+    if (!onScreenImageChange) return;
+    selectDevice(slot);
+    setScreenCropSession({ slot, sourceSlideId: source.id, original: source.image });
+    if (source.image.mode !== "custom") {
+      onScreenImageChange(source.id, {
+        ...source.image,
+        mode: "custom",
+        scale: Math.max(1, source.image.scale),
+        offsetX: 0,
+        offsetY: 0,
+      });
+    }
+  };
+
+  const beginScreenCropDrag = (
+    event: React.PointerEvent<HTMLElement>,
+    image: StoreImageTransform,
+  ): void => {
+    if (event.button !== 0) return;
+    event.preventDefault();
+    event.stopPropagation();
+    event.currentTarget.setPointerCapture(event.pointerId);
+    screenCropDragRef.current = {
+      pointerId: event.pointerId,
+      startX: event.clientX,
+      startY: event.clientY,
+      origin: image,
+    };
+  };
+
+  const moveScreenCropDrag = (
+    event: React.PointerEvent<HTMLElement>,
+    sourceSlideId: string,
+  ): void => {
+    const drag = screenCropDragRef.current;
+    if (!drag || drag.pointerId !== event.pointerId || !onScreenImageChange) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const bounds = event.currentTarget.getBoundingClientRect();
+    if (bounds.width === 0 || bounds.height === 0) return;
+    onScreenImageChange(sourceSlideId, {
+      ...drag.origin,
+      mode: "custom",
+      offsetX: clamp(drag.origin.offsetX + ((event.clientX - drag.startX) / bounds.width) * 100, -100, 100),
+      offsetY: clamp(drag.origin.offsetY + ((event.clientY - drag.startY) / bounds.height) * 100, -100, 100),
+    });
+  };
+
+  const endScreenCropDrag = (event: React.PointerEvent<HTMLElement>): void => {
+    if (screenCropDragRef.current?.pointerId !== event.pointerId) return;
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
+    screenCropDragRef.current = null;
+  };
+
+  const moveScreenCropWithKeyboard = (
+    event: React.KeyboardEvent<HTMLElement>,
+    source: StoreSlide,
+  ): void => {
+    if (!onScreenImageChange) return;
+    if (event.key === "Escape" && screenCropSession?.sourceSlideId === source.id) {
+      event.preventDefault();
+      onScreenImageChange(source.id, screenCropSession.original);
+      setScreenCropSession(null);
+      return;
+    }
+    const amount = event.shiftKey ? 5 : 1;
+    const deltaX = event.key === "ArrowLeft" ? -amount : event.key === "ArrowRight" ? amount : 0;
+    const deltaY = event.key === "ArrowUp" ? -amount : event.key === "ArrowDown" ? amount : 0;
+    if (deltaX === 0 && deltaY === 0) return;
+    event.preventDefault();
+    onScreenImageChange(source.id, {
+      ...source.image,
+      mode: "custom",
+      offsetX: clamp(source.image.offsetX + deltaX, -100, 100),
+      offsetY: clamp(source.image.offsetY + deltaY, -100, 100),
+    });
   };
 
   const beginDeviceInteraction = (
@@ -369,6 +609,9 @@ export const StoreSlideCanvas = React.memo(function StoreSlideCanvas({
     event.preventDefault();
     event.stopPropagation();
     const bounds = canvas.getBoundingClientRect();
+    if (Math.hypot(event.clientX - drag.startX, event.clientY - drag.startY) > 3) {
+      textPointerMovedRef.current = true;
+    }
     const deltaX = ((event.clientX - drag.startX) / bounds.width) * 100;
     const deltaY = ((event.clientY - drag.startY) / bounds.height) * 100;
 
@@ -403,6 +646,14 @@ export const StoreSlideCanvas = React.memo(function StoreSlideCanvas({
       event.currentTarget.releasePointerCapture(event.pointerId);
     }
     dragRef.current = null;
+  };
+
+  const editTextOnClick = (field: "heading" | "subheading"): void => {
+    if (textPointerMovedRef.current) {
+      textPointerMovedRef.current = false;
+      return;
+    }
+    onTextEditRequest?.(field);
   };
 
   const moveTextWithKeyboard = (
@@ -506,12 +757,20 @@ export const StoreSlideCanvas = React.memo(function StoreSlideCanvas({
               role={interactive ? "button" : undefined}
               tabIndex={interactive ? 0 : undefined}
               aria-label={interactive ? "Move heading" : undefined}
-              title={interactive ? "Drag to reposition heading" : undefined}
+              title={interactive ? "Click to edit; drag to reposition heading" : undefined}
               onPointerDown={(event) => beginTextDrag(event, { kind: "heading", origin: headingOffset })}
               onPointerMove={moveDraggedText}
               onPointerUp={endTextDrag}
               onPointerCancel={endTextDrag}
-              onKeyDown={(event) => moveTextWithKeyboard(event, "heading")}
+              onClick={() => editTextOnClick("heading")}
+              onKeyDown={(event) => {
+                if (event.key === "Enter" || event.key === " ") {
+                  event.preventDefault();
+                  onTextEditRequest?.("heading");
+                  return;
+                }
+                moveTextWithKeyboard(event, "heading");
+              }}
               className={cn(interactiveTextClass, "whitespace-pre-line text-balance font-semibold tracking-[-0.04em]")}
               style={{
                 color: headlineColor,
@@ -529,12 +788,20 @@ export const StoreSlideCanvas = React.memo(function StoreSlideCanvas({
               role={interactive ? "button" : undefined}
               tabIndex={interactive ? 0 : undefined}
               aria-label={interactive ? "Move subheading" : undefined}
-              title={interactive ? "Drag to reposition subheading" : undefined}
+              title={interactive ? "Click to edit; drag to reposition subheading" : undefined}
               onPointerDown={(event) => beginTextDrag(event, { kind: "subheading", origin: subheadingOffset })}
               onPointerMove={moveDraggedText}
               onPointerUp={endTextDrag}
               onPointerCancel={endTextDrag}
-              onKeyDown={(event) => moveTextWithKeyboard(event, "subheading")}
+              onClick={() => editTextOnClick("subheading")}
+              onKeyDown={(event) => {
+                if (event.key === "Enter" || event.key === " ") {
+                  event.preventDefault();
+                  onTextEditRequest?.("subheading");
+                  return;
+                }
+                moveTextWithKeyboard(event, "subheading");
+              }}
               className={cn(interactiveTextClass, "text-pretty font-medium tracking-[-0.015em]")}
               style={{
                 color: subheadingColor,
@@ -604,7 +871,10 @@ export const StoreSlideCanvas = React.memo(function StoreSlideCanvas({
         const adjustedWidth = device.width * transform.scale;
         const movementLimit = resolvedDeviceStyle === "screen-only" ? 100 : 25;
         const deviceKey = `${slide.id}-${device.source}-${index}`;
-        const selected = interactive && selectedDeviceSlot === slot;
+        const emptyScreen = !definition && !source.src;
+        const selected = interactive && selectedDeviceSlot === slot && !emptyScreen;
+        const cropping = screenCropSession?.slot === slot
+          && screenCropSession.sourceSlideId === source.id;
         const objectLabel = layoutId === "duo"
           ? `${device.source === "primary" ? "left" : "right"} ${definition ? "device" : "screen"}`
           : definition ? "device" : "screen";
@@ -642,16 +912,40 @@ export const StoreSlideCanvas = React.memo(function StoreSlideCanvas({
                   ].filter(Boolean).join(" "),
                 }}
               >
-                <StoreDevice slide={source} style={resolvedDeviceStyle} />
+                <StoreDevice
+                  slide={source}
+                  style={resolvedDeviceStyle}
+                  interactive={interactive}
+                  cropping={cropping}
+                  onScreenFile={(file) => onScreenFile?.(source.id, file)}
+                  onScreenPointerDown={(event) => beginScreenCropDrag(event, source.image)}
+                  onScreenPointerMove={(event) => moveScreenCropDrag(event, source.id)}
+                  onScreenPointerUp={endScreenCropDrag}
+                  onScreenPointerCancel={endScreenCropDrag}
+                  onScreenKeyDown={(event) => moveScreenCropWithKeyboard(event, source)}
+                />
               </div>
 
-              {interactive ? (
+              {interactive && !emptyScreen && !cropping ? (
                 <button
                   type="button"
                   data-store-device-control="move"
                   aria-label={`Move ${objectLabel}`}
                   title={`Click to select ${objectLabel}; drag to move`}
                   onFocus={() => selectDevice(slot)}
+                  onDragOver={(event) => {
+                    if (!event.dataTransfer.types.includes("Files")) return;
+                    event.preventDefault();
+                    event.stopPropagation();
+                    event.dataTransfer.dropEffect = "copy";
+                  }}
+                  onDrop={(event) => {
+                    const file = Array.from(event.dataTransfer.files).find((item) => item.type.startsWith("image/"));
+                    if (!file) return;
+                    event.preventDefault();
+                    event.stopPropagation();
+                    onScreenFile?.(source.id, file);
+                  }}
                   onPointerDown={(event) => beginDeviceInteraction(event, "move", slot, transform, movementLimit)}
                   onPointerMove={moveDeviceInteraction}
                   onPointerUp={endDeviceInteraction}
@@ -661,7 +955,82 @@ export const StoreSlideCanvas = React.memo(function StoreSlideCanvas({
                 />
               ) : null}
 
-              {selected ? (
+              {selected && cropping ? (
+                <>
+                  {!definition ? (
+                    <div
+                      data-store-device-control="crop-image"
+                      role="group"
+                      tabIndex={0}
+                      aria-label={`Reposition ${objectLabel} crop`}
+                      aria-keyshortcuts="ArrowUp ArrowDown ArrowLeft ArrowRight Escape"
+                      title="Drag to reposition the image inside the crop"
+                      onPointerDown={(event) => beginScreenCropDrag(event, source.image)}
+                      onPointerMove={(event) => moveScreenCropDrag(event, source.id)}
+                      onPointerUp={endScreenCropDrag}
+                      onPointerCancel={endScreenCropDrag}
+                      onKeyDown={(event) => moveScreenCropWithKeyboard(event, source)}
+                      className="pointer-events-auto absolute inset-0 z-30 cursor-move touch-none select-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-background"
+                    >
+                      <CropGridOverlay />
+                    </div>
+                  ) : null}
+                  <div className={cn(
+                    "pointer-events-auto absolute left-1/2 z-40 flex h-10 -translate-x-1/2 items-center gap-0.5 rounded-full border border-foreground/15 bg-background/95 p-1 text-foreground shadow-lg backdrop-blur-sm",
+                    definition ? "top-2" : "-top-14",
+                  )}>
+                    <button
+                      type="button"
+                      aria-label="Zoom image out"
+                      title="Zoom out"
+                      onClick={() => onScreenImageChange?.(source.id, {
+                        ...source.image,
+                        mode: "custom",
+                        scale: Math.round(clamp(source.image.scale - 0.1, 0.25, 4) * 100) / 100,
+                      })}
+                      className="flex size-8 items-center justify-center rounded-full text-muted-foreground hover:bg-foreground/[0.07] hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-foreground/30"
+                    >
+                      <span aria-hidden="true">−</span>
+                    </button>
+                    <span className="min-w-9 text-center text-[10px] tabular-nums text-muted-foreground">
+                      {Math.round(source.image.scale * 100)}%
+                    </span>
+                    <button
+                      type="button"
+                      aria-label="Zoom image in"
+                      title="Zoom in"
+                      onClick={() => onScreenImageChange?.(source.id, {
+                        ...source.image,
+                        mode: "custom",
+                        scale: Math.round(clamp(source.image.scale + 0.1, 0.25, 4) * 100) / 100,
+                      })}
+                      className="flex size-8 items-center justify-center rounded-full text-muted-foreground hover:bg-foreground/[0.07] hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-foreground/30"
+                    >
+                      <span aria-hidden="true">+</span>
+                    </button>
+                    <span aria-hidden="true" className="mx-0.5 h-4 w-px bg-foreground/10" />
+                    <button
+                      type="button"
+                      onClick={() => {
+                        onScreenImageChange?.(source.id, screenCropSession.original);
+                        setScreenCropSession(null);
+                      }}
+                      className="min-h-8 rounded-full px-2.5 py-1 text-[10px] font-medium text-muted-foreground hover:bg-foreground/[0.07] hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-foreground/30"
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setScreenCropSession(null)}
+                      className="min-h-8 rounded-full bg-foreground px-2.5 py-1 text-[10px] font-medium text-background hover:opacity-85 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-foreground/40"
+                    >
+                      Done
+                    </button>
+                  </div>
+                </>
+              ) : null}
+
+              {selected && !cropping ? (
                 <>
                   {(["top-left", "top-right", "bottom-left", "bottom-right"] as const).map((handle) => (
                     <button
@@ -676,7 +1045,7 @@ export const StoreSlideCanvas = React.memo(function StoreSlideCanvas({
                       onPointerCancel={endDeviceInteraction}
                       onKeyDown={(event) => resizeDeviceWithKeyboard(event, slot, transform)}
                       className={cn(
-                        "pointer-events-auto absolute z-30 size-3 rounded-[2px] border-2 border-[var(--canvas-selection)] bg-[var(--canvas-control-surface)] shadow-sm before:absolute before:-inset-2 before:content-[''] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--canvas-selection)]",
+                        "pointer-events-auto absolute z-30 size-3 rounded-[2px] border-2 border-[var(--canvas-selection)] bg-[var(--canvas-control-surface)] shadow-sm before:absolute before:-inset-3.5 before:content-[''] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--canvas-selection)]",
                         handle.includes("top") ? "-top-1.5" : "-bottom-1.5",
                         handle.includes("left") ? "-left-1.5" : "-right-1.5",
                         handle === "top-left" || handle === "bottom-right" ? "cursor-nwse-resize" : "cursor-nesw-resize",
@@ -697,13 +1066,46 @@ export const StoreSlideCanvas = React.memo(function StoreSlideCanvas({
                     onPointerUp={endDeviceInteraction}
                     onPointerCancel={endDeviceInteraction}
                     onKeyDown={(event) => rotateDeviceWithKeyboard(event, slot, transform)}
-                    className="pointer-events-auto absolute -top-11 left-1/2 z-30 flex size-6 -translate-x-1/2 cursor-grab touch-none select-none items-center justify-center rounded-full border-2 border-[var(--canvas-selection)] bg-[var(--canvas-control-surface)] text-[var(--canvas-selection)] shadow-sm before:absolute before:-inset-1.5 before:content-[''] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--canvas-selection)] active:cursor-grabbing"
+                    className="pointer-events-auto absolute -top-12 left-1/2 z-30 flex size-8 -translate-x-1/2 cursor-grab touch-none select-none items-center justify-center rounded-full border-2 border-[var(--canvas-selection)] bg-[var(--canvas-control-surface)] text-[var(--canvas-selection)] shadow-sm before:absolute before:-inset-1 before:content-[''] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--canvas-selection)] active:cursor-grabbing"
                   >
                     <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
                       <path d="M21.5 2v6h-6" />
                       <path d="M21.34 13.72A10 10 0 1 1 18.57 4.62L21.5 8" />
                     </svg>
                   </button>
+                  {!definition && source.src ? (
+                    <>
+                      <button
+                        type="button"
+                        data-store-device-control="start-crop"
+                        aria-label={`Crop ${objectLabel} image`}
+                        title={`Crop ${objectLabel} image`}
+                        onClick={(event) => startScreenCrop(event, slot, source)}
+                        className="pointer-events-auto absolute -top-12 left-1/2 z-30 flex size-8 -translate-x-14 items-center justify-center rounded-full border-2 border-[var(--canvas-selection)] bg-[var(--canvas-control-surface)] text-[var(--canvas-selection)] shadow-sm before:absolute before:-inset-1 before:content-[''] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--canvas-selection)]"
+                      >
+                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.25" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                          <path d="M6 2v14a2 2 0 0 0 2 2h14" />
+                          <path d="M2 6h14a2 2 0 0 1 2 2v14" />
+                        </svg>
+                      </button>
+                      <button
+                        type="button"
+                        data-store-device-control="delete-screen"
+                        aria-label={`Delete ${objectLabel} image`}
+                        title={`Delete ${objectLabel} image`}
+                        onClick={(event) => {
+                          event.preventDefault();
+                          event.stopPropagation();
+                          onScreenDelete?.(source.id);
+                        }}
+                        className="pointer-events-auto absolute -top-12 left-1/2 z-30 flex size-8 translate-x-6 items-center justify-center rounded-full border-2 border-destructive bg-[var(--canvas-control-surface)] text-destructive shadow-sm before:absolute before:-inset-1 before:content-[''] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-destructive/50"
+                      >
+                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" aria-hidden="true">
+                          <path d="M6 6l12 12M18 6L6 18" />
+                        </svg>
+                      </button>
+                    </>
+                  ) : null}
                 </>
               ) : null}
             </div>
